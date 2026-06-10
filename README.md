@@ -1,5 +1,7 @@
 # Capture Traindata Firmware
 
+Based on `capture_traindata` firmware from [BeeSense](https://github.com/INSECTA-SYSTEMS/BeeSense)
+
 Diese Firmware erzeugt Trainingsdaten direkt auf dem ESP32-S3:
 
 - Kameraaufnahme in jedem Zyklus
