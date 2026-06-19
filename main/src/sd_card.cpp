@@ -196,6 +196,33 @@ bool create_dir(const char *full_path) {
     }
 }
 
+bool create_logfile(const char *full_path) {
+    if (!g_mounted) {
+        ESP_LOGE(TAG, "create_logfile: SD not mounted");
+        return false;
+    }
+
+    // S_ISREG: POSIX macro to check if it's a file
+    struct stat st;
+    if (stat(full_path, &st) == 0) {
+        if (S_ISREG(st.st_mode)) {
+            ESP_LOGI(TAG, "Logfile already exists: %s", full_path);
+            return true;
+        } else {
+            ESP_LOGE(TAG, "Path exists but is not a logfile: %s", full_path);
+            return false;
+        }
+    }
+
+    FILE *logfile = fopen(full_path, "w");
+    if (logfile==0) {
+        ESP_LOGE(TAG, "Failed to create logfile: %s (errno=%d)", full_path, errno);
+        return false;
+    }
+    fclose(logfile);
+    return true;
+}
+
 int count_files(const char *path) {
     int count = 0;
     DIR *dir = opendir(path);
