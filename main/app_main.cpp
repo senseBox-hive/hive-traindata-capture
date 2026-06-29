@@ -87,6 +87,8 @@ void capture_stack_consecutive(camera_fb_t *base_pic, float alpha)
 
 extern "C" void app_main(void)
 {
+    gpio_set_direction(GPIO_NUM_43, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_43, 1);
     ESP_LOGI("SD", "Mounting SD card...");
     gpio_set_direction(GPIO_NUM_43, GPIO_MODE_OUTPUT);
     gpio_set_level(GPIO_NUM_43, 1);
@@ -101,24 +103,32 @@ extern "C" void app_main(void)
         return;
     }
 
-    ESP_LOGI("MEM", "Capturing base frame for stacking...");
-    camera_fb_t *main_pic = esp_camera_fb_get();
+    ESP_LOGI("SD", "CREATING LOGFILE...");
+    bool log_initialized = sdcard::create_logfile("/sdcard/bee_traindata/log.txt");
+    if (!log_initialized) {
+        ESP_LOGE("SD", "Failed to create log file");
+        return;
+    }
+    sdcard::write_log("/sdcard/bee_traindata/log.txt", "logile initialized");
 
-    ESP_LOGI("MEM", "Begin Stacking loop...");
+    sdcard::write_log("/sdcard/bee_traindata/log.txt", "Start image capture loop");
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
-        //stack consecutive frames to capture bee trajectories
-    
-        if (!main_pic) {
+        
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Attempting capture...");
+        camera_fb_t *pic = esp_camera_fb_get();
+        if (!pic) {
+            sdcard::write_log("/sdcard/bee_traindata/log.txt", "Camera capture failed");
             continue;
         }
 
-        //capture new frame and stack it on top of the main_pic with set transparency
-        capture_stack_consecutive(main_pic, 0.3f);
-
-        //rohes JPEG speichern (will encode when needed)
-        sdcard::save_jpeg_directly(main_pic, "/sdcard/bee_traindata");
-
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Saving JPEG...");
+        //rohes JPEG speichern
+        sdcard::save_jpeg_directly(pic, "/sdcard/bee_traindata");
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "JPEG saved successfully");
+        esp_camera_fb_return(pic);
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Capture loop iteration complete");
+        
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
     // return main buffer so camera driver can reuse it

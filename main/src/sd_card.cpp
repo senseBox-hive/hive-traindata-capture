@@ -4,6 +4,7 @@
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
 #include "esp_camera.h"
+#include "esp_timer.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/gpio.h"
@@ -58,7 +59,7 @@ static bool mount_sdcard_spi() {
     // If format_if_mount_failed is set to true, SD card will be partitioned and
     // formatted in case when mounting fails.
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024,
         .disk_status_check_enable = false,
@@ -167,7 +168,13 @@ static jpeg_error_t encode_img_to_jpeg(const dl::image::img_t *img, dl::image::j
 // --------- Public API ----------------------------------
 
 bool init() {
-    return mount_sdcard_spi();
+    bool mounted = mount_sdcard_spi();
+
+    // Make sure directory exists
+    if (mounted && !create_dir("/sdcard/bee_traindata")) {
+        return false;
+    }
+    return mounted;
 }
 
 bool create_dir(const char *full_path) {
@@ -230,12 +237,14 @@ void write_log(const char *log_path, const char *log_entry) {
         return;
     }
 
+    int64_t time_ms = esp_timer_get_time() / 1000;
+
     FILE *logfile = fopen(log_path, "a");
     if (logfile == nullptr) {
         ESP_LOGE(TAG, "Failed to open logfile for appending: %s (errno=%d)", log_path, errno);
         return;
     }
-    fprintf(logfile, "%s\n", log_entry);
+    fprintf(logfile, "%lldms %s\n", time_ms, log_entry);
     ESP_LOGI(TAG,"%s",log_entry);
     fclose(logfile);
 }
