@@ -65,6 +65,8 @@ static esp_err_t init_camera(void)
 
 extern "C" void app_main(void)
 {
+    gpio_set_direction(GPIO_NUM_43, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_43, 1);
     ESP_LOGI("SD", "Mounting SD card...");
     bool mounted = sdcard::init();
     if (!mounted) {
@@ -83,19 +85,25 @@ extern "C" void app_main(void)
         ESP_LOGE("SD", "Failed to create log file");
         return;
     }
-    sdcard::write_log("/sdcard/bee_traindata/log.txt", "Log file initialized");
+    sdcard::write_log("/sdcard/bee_traindata/log.txt", "logile initialized");
 
+    sdcard::write_log("/sdcard/bee_traindata/log.txt", "Start image capture loop");
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
         
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Attempting capture...");
         camera_fb_t *pic = esp_camera_fb_get();
         if (!pic) {
+            sdcard::write_log("/sdcard/bee_traindata/log.txt", "Camera capture failed");
             continue;
         }
 
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Saving JPEG...");
         //rohes JPEG speichern
         sdcard::save_jpeg_directly(pic, "/sdcard/bee_traindata");
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "JPEG saved successfully");
         esp_camera_fb_return(pic);
+        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Capture loop iteration complete");
         
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
