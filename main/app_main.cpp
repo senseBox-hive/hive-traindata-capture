@@ -76,7 +76,15 @@ extern "C" void app_main(void)
         ESP_LOGE("APP", "Camera initialization failed");
         return;
     }
-    
+
+    ESP_LOGI("SD", "CREATING LOGFILE...");
+    bool log_initialized = sdcard::create_logfile("/sdcard/bee_traindata/log.txt");
+    if (!log_initialized) {
+        ESP_LOGE("SD", "Failed to create log file");
+        return;
+    }
+    sdcard::write_log("/sdcard/bee_traindata/log.txt", "Log file initialized");
+
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
         

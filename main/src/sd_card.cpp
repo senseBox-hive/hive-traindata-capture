@@ -223,6 +223,22 @@ bool create_logfile(const char *full_path) {
     return true;
 }
 
+void write_log(const char *log_path, const char *log_entry) {
+    if (!g_mounted) {
+        ESP_LOGE(TAG, "write_log: SD not mounted");
+        return;
+    }
+
+    FILE *logfile = fopen(log_path, "a");
+    if (logfile == nullptr) {
+        ESP_LOGE(TAG, "Failed to open logfile for appending: %s (errno=%d)", log_path, errno);
+        return;
+    }
+    fprintf(logfile, "%s\n", log_entry);
+    ESP_LOGI(TAG,"%s",log_entry);
+    fclose(logfile);
+}
+
 int count_files(const char *path) {
     int count = 0;
     DIR *dir = opendir(path);

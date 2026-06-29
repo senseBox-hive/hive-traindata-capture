@@ -12,6 +12,8 @@ bool create_dir(const char *full_path);
 
 bool create_logfile(const char *full_path);
 
+void write_log(const char *log_path, const char *log_entry);
+
 int count_files(const char *full_path);
 
 bool save_jpeg(const dl::image::img_t &img, const dl::cls::result_t &best, const char *dir_full_path);
