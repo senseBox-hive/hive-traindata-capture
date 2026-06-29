@@ -74,7 +74,7 @@ static bool mount_sdcard_spi() {
     // host.'slot' should be set to an sdspi device initialized by `sdspi_host_init_device()`.
     // SDSPI_HOST_DEFAULT: https://github.com/espressif/esp-idf/blob/1bbf04cb4cf54d74c1fe21ed12dbf91eb7fb1019/components/esp_driver_sdspi/include/driver/sdspi_host.h#L44
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.max_freq_khz = 5000;
+    host.max_freq_khz = 20000; // 20 MHz
 
     constexpr spi_host_device_t SPI_HOST_ID = SPI3_HOST;
     host.slot = SPI_HOST_ID;
@@ -85,7 +85,7 @@ static bool mount_sdcard_spi() {
     bus_cfg.sclk_io_num      = PIN_NUM_CLK;
     bus_cfg.quadwp_io_num    = -1;
     bus_cfg.quadhd_io_num    = -1;
-    bus_cfg.max_transfer_sz  = 4000;
+    bus_cfg.max_transfer_sz  = 16000;
 
     ESP_LOGI(TAG, "Initializing SPI bus");
     ret = spi_bus_initialize(SPI_HOST_ID, &bus_cfg, SDSPI_DEFAULT_DMA);
