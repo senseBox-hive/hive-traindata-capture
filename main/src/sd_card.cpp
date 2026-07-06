@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
+#include "esp_camera.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/gpio.h"
@@ -364,34 +365,122 @@ bool save_jpeg(const dl::image::img_t &img,
 
 bool save_jpeg_directly(camera_fb_t *captureImage, const char *dir_full_path)
 {
-    // Find the next available filename
-    char filename[32];
-
-    // Make sure directory exists
     if (!create_dir(dir_full_path)) {
         return false;
     }
-    
-    // Determine next index in directory
+
     int idx = count_files(dir_full_path);
+    if (idx < 0) idx = 0;
 
-    std::snprintf(filename, sizeof(filename), "%s/bee_%04d.jpg", dir_full_path, idx++);
+    char filepath[256];
+    std::snprintf(filepath, sizeof(filepath), "%s/bee_%04d.jpg", dir_full_path, idx + 1);
 
-    // Create the file and write the JPEG data
-    ESP_LOGI(TAG, "Saving detected JPEG: %s", filename);
-    FILE *fp = fopen(filename, "wb");
-    if (fp != NULL)
-    {
-        fwrite(captureImage->buf, 1, captureImage->len, fp);
+    ESP_LOGI(TAG, "Saving detected JPEG: %s", filepath);
+
+    if (!captureImage) {
+        ESP_LOGE(TAG, "save_jpeg_directly: null captureImage");
+        return false;
+    }
+
+    // If the frame buffer already contains JPEG compressed data, write directly
+    if (captureImage->format == PIXFORMAT_JPEG) {
+        FILE *fp = fopen(filepath, "wb");
+        if (!fp) {
+            ESP_LOGE(TAG, "Failed to create file: %s (errno=%d)", filepath, errno);
+            return false;
+        }
+        size_t wrote = fwrite(captureImage->buf, 1, captureImage->len, fp);
         fclose(fp);
-        ESP_LOGI(TAG, "JPEG saved as %s", filename);
+        if (wrote != captureImage->len) {
+            ESP_LOGE(TAG, "Incomplete write for %s: wrote %u of %u", filepath, (unsigned)wrote, (unsigned)captureImage->len);
+            return false;
+        }
+        ESP_LOGI(TAG, "JPEG saved as %s", filepath);
         return true;
     }
-    //else
-    //{
-    //    ESP_LOGE(TAG, "Failed to create file: %s", filename);
-    // //this errors and I dont know why
-    //}
+
+    // Otherwise convert raw frame (e.g., GRAYSCALE or RGB565) to RGB888 and encode to JPEG
+    int width = captureImage->width;
+    int height = captureImage->height;
+    size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+    uint8_t *rgb_buf = static_cast<uint8_t*>(malloc(pixels * 3));
+    if (!rgb_buf) {
+        ESP_LOGE(TAG, "Failed to allocate rgb buffer");
+        return false;
+    }
+
+    if (captureImage->format == PIXFORMAT_GRAYSCALE) {
+        for (size_t i = 0; i < pixels; ++i) {
+            uint8_t g = captureImage->buf[i];
+            rgb_buf[3*i + 0] = g;
+            rgb_buf[3*i + 1] = g;
+            rgb_buf[3*i + 2] = g;
+        }
+    } else if (captureImage->format == PIXFORMAT_RGB565) {
+        // Convert RGB565 -> RGB888
+        for (size_t i = 0; i < pixels; ++i) {
+            uint16_t val = static_cast<uint16_t>(captureImage->buf[2*i]) | (static_cast<uint16_t>(captureImage->buf[2*i + 1]) << 8);
+            uint8_t r = ((val >> 11) & 0x1F) << 3;
+            uint8_t g = ((val >> 5) & 0x3F) << 2;
+            uint8_t b = (val & 0x1F) << 3;
+            rgb_buf[3*i + 0] = r;
+            rgb_buf[3*i + 1] = g;
+            rgb_buf[3*i + 2] = b;
+        }
+    } else {
+        ESP_LOGW(TAG, "Unsupported frame format %d, attempting raw write", captureImage->format);
+        FILE *fp = fopen(filepath, "wb");
+        if (!fp) {
+            ESP_LOGE(TAG, "Failed to create file: %s (errno=%d)", filepath, errno);
+            free(rgb_buf);
+            return false;
+        }
+        fwrite(captureImage->buf, 1, captureImage->len, fp);
+        fclose(fp);
+        free(rgb_buf);
+        return true;
+    }
+
+    // Prepare image struct for encoder
+    dl::image::img_t img;
+    img.width = width;
+    img.height = height;
+    img.data = rgb_buf;
+    img.pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB888;
+
+    dl::image::jpeg_img_t jpeg_img;
+    jpeg_enc_config_t enc_cfg = {
+        .width = width,
+        .height = height,
+        .src_type = JPEG_PIXEL_FORMAT_RGB888,
+        .subsampling = JPEG_SUBSAMPLE_444,
+        .quality = 80,
+        .rotate = JPEG_ROTATE_0D,
+        .task_enable = true,
+        .hfm_task_priority = 13,
+        .hfm_task_core = 1,
+    };
+
+    jpeg_error_t enc_ret = encode_img_to_jpeg(&img, &jpeg_img, enc_cfg);
+    if (enc_ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "JPEG encoding failed (%d)", enc_ret);
+        free(rgb_buf);
+        return false;
+    }
+
+    FILE *fp = fopen(filepath, "wb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to create file: %s (errno=%d)", filepath, errno);
+        free(jpeg_img.data);
+        free(rgb_buf);
+        return false;
+    }
+    fwrite(jpeg_img.data, 1, jpeg_img.data_len, fp);
+    fclose(fp);
+
+    ESP_LOGI(TAG, "JPEG saved as %s", filepath);
+    free(jpeg_img.data);
+    free(rgb_buf);
     return true;
 }
 

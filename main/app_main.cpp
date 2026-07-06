@@ -43,7 +43,7 @@ static camera_config_t camera_config = {
     .pixel_format = PIXFORMAT_GRAYSCALE,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
     .frame_size = FRAMESIZE_QVGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
     .jpeg_quality = 10,                // The quality of the JPEG image, ranging from 0 to 63.
-    .fb_count = 1,                     // The number of frame buffers to use.
+    .fb_count = 2,                     // The number of frame buffers to use.
     .fb_location = CAMERA_FB_IN_PSRAM, // Set the frame buffer storage location
     .grab_mode = CAMERA_GRAB_LATEST    //  The image capture mode.
 
@@ -69,8 +69,9 @@ void capture_averaged_image(camera_fb_t *main_pic, int num_frames)
         return;
     }
 
-    // Create a buffer to hold the accumulated pixel values
-    std::vector<uint32_t> accumulated(main_pic->len / 3, 0); // Assuming RGB888 format
+    // Handle grayscale frames: 1 byte per pixel
+    size_t n = main_pic->len;
+    std::vector<uint32_t> accumulated(n, 0);
 
     for (int i = 0; i < num_frames; ++i) {
         camera_fb_t *frame = esp_camera_fb_get();
@@ -78,21 +79,22 @@ void capture_averaged_image(camera_fb_t *main_pic, int num_frames)
             continue;
         }
 
-        // Accumulate pixel values
-        for (size_t j = 0; j < frame->len; j += 3) {
-            accumulated[j / 3] += frame->buf[j];     // R
-            accumulated[j / 3] += frame->buf[j + 1]; // G
-            accumulated[j / 3] += frame->buf[j + 2]; // B
+        // If frame size differs, skip this frame
+        if (frame->len != n) {
+            esp_camera_fb_return(frame);
+            continue;
+        }
+
+        for (size_t j = 0; j < n; ++j) {
+            accumulated[j] += frame->buf[j];
         }
 
         esp_camera_fb_return(frame);
     }
 
-    // Average the accumulated pixel values and store them back in main_pic
-    for (size_t j = 0; j < main_pic->len; j += 3) {
-        main_pic->buf[j]     = static_cast<uint8_t>(accumulated[j / 3] / num_frames);     // R
-        main_pic->buf[j + 1] = static_cast<uint8_t>(accumulated[j / 3] / num_frames);     // G
-        main_pic->buf[j + 2] = static_cast<uint8_t>(accumulated[j / 3] / num_frames);     // B
+    // Average and write back into main_pic (grayscale)
+    for (size_t j = 0; j < n; ++j) {
+        main_pic->buf[j] = static_cast<uint8_t>(accumulated[j] / num_frames);
     }
 }
 
@@ -120,13 +122,15 @@ extern "C" void app_main(void)
         if (!main_pic) {
             continue;
         }
-        esp_camera_fb_return(main_pic);
 
-        //capture 20 frames and stack on top of the main_pic
-        capture_averaged_image(main_pic, 20);
+        //capture N frames and stack on top of the main_pic
+        capture_averaged_image(main_pic, 6);
 
-        //rohes JPEG speichern
+        //rohes JPEG speichern (will encode when needed)
         sdcard::save_jpeg_directly(main_pic, "/sdcard/bee_traindata");
+
+        // return main buffer so camera driver can reuse it
+        esp_camera_fb_return(main_pic);
         
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
