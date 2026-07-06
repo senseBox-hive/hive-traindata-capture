@@ -40,8 +40,8 @@ static camera_config_t camera_config = {
     .pin_pclk = PCLK_GPIO_NUM,
 
     .xclk_freq_hz = 20000000,          // The clock frequency of the image sensor
-    .pixel_format = PIXFORMAT_JPEG,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
-    .frame_size = FRAMESIZE_UXGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
+    .pixel_format = PIXFORMAT_GRAYSCALE,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
+    .frame_size = FRAMESIZE_QVGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
     .jpeg_quality = 10,                // The quality of the JPEG image, ranging from 0 to 63.
     .fb_count = 1,                     // The number of frame buffers to use.
     .fb_location = CAMERA_FB_IN_PSRAM, // Set the frame buffer storage location
@@ -63,9 +63,44 @@ static esp_err_t init_camera(void)
     return err;
 }
 
+void capture_averaged_image(camera_fb_t *main_pic, int num_frames)
+{
+    if (!main_pic || num_frames <= 0) {
+        return;
+    }
+
+    // Create a buffer to hold the accumulated pixel values
+    std::vector<uint32_t> accumulated(main_pic->len / 3, 0); // Assuming RGB888 format
+
+    for (int i = 0; i < num_frames; ++i) {
+        camera_fb_t *frame = esp_camera_fb_get();
+        if (!frame) {
+            continue;
+        }
+
+        // Accumulate pixel values
+        for (size_t j = 0; j < frame->len; j += 3) {
+            accumulated[j / 3] += frame->buf[j];     // R
+            accumulated[j / 3] += frame->buf[j + 1]; // G
+            accumulated[j / 3] += frame->buf[j + 2]; // B
+        }
+
+        esp_camera_fb_return(frame);
+    }
+
+    // Average the accumulated pixel values and store them back in main_pic
+    for (size_t j = 0; j < main_pic->len; j += 3) {
+        main_pic->buf[j]     = static_cast<uint8_t>(accumulated[j / 3] / num_frames);     // R
+        main_pic->buf[j + 1] = static_cast<uint8_t>(accumulated[j / 3] / num_frames);     // G
+        main_pic->buf[j + 2] = static_cast<uint8_t>(accumulated[j / 3] / num_frames);     // B
+    }
+}
+
 extern "C" void app_main(void)
 {
     ESP_LOGI("SD", "Mounting SD card...");
+    gpio_set_direction(GPIO_NUM_43, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_43, 1);
     bool mounted = sdcard::init();
     if (!mounted) {
         ESP_LOGE("SD", "SD card init/mount failed");
@@ -77,25 +112,21 @@ extern "C" void app_main(void)
         return;
     }
 
-    ESP_LOGI("SD", "CREATING LOGFILE...");
-    bool log_initialized = sdcard::create_logfile("/sdcard/bee_traindata/log.txt");
-    if (!log_initialized) {
-        ESP_LOGE("SD", "Failed to create log file");
-        return;
-    }
-    sdcard::write_log("/sdcard/bee_traindata/log.txt", "Log file initialized");
-
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
-        
-        camera_fb_t *pic = esp_camera_fb_get();
-        if (!pic) {
+        //stack consecutive frames to capture bee trajectories
+
+        camera_fb_t *main_pic = esp_camera_fb_get();
+        if (!main_pic) {
             continue;
         }
+        esp_camera_fb_return(main_pic);
+
+        //capture 20 frames and stack on top of the main_pic
+        capture_averaged_image(main_pic, 20);
 
         //rohes JPEG speichern
-        sdcard::save_jpeg_directly(pic, "/sdcard/bee_traindata");
-        esp_camera_fb_return(pic);
+        sdcard::save_jpeg_directly(main_pic, "/sdcard/bee_traindata");
         
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }

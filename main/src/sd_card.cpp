@@ -343,10 +343,10 @@ bool save_jpeg(const dl::image::img_t &img,
     time_t t = time(NULL);
     tm_now = localtime(&t);
     if (tm_now) {
+#ifdef f_utime
         FILINFO finfo = {0};
         finfo.fdate = ((tm_now->tm_year - 80) << 9) | ((tm_now->tm_mon + 1) << 5) | tm_now->tm_mday;
         finfo.ftime = (tm_now->tm_hour << 11) | (tm_now->tm_min << 5) | (tm_now->tm_sec / 2);
-#ifdef f_utime
         if (f_utime(filepath, &finfo) != 0) {
             ESP_LOGW(TAG, "Could not set FATFS file time: %s", filepath);
         }
