@@ -364,34 +364,153 @@ bool save_jpeg(const dl::image::img_t &img,
 
 bool save_jpeg_directly(camera_fb_t *captureImage, const char *dir_full_path)
 {
-    // Find the next available filename
-    char filename[32];
+    if (!g_mounted) {
+        ESP_LOGE(TAG, "save_jpeg_directly: SD not mounted");
+        return false;
+    }
+    if (!captureImage || !captureImage->buf) {
+        ESP_LOGE(TAG, "save_jpeg_directly: invalid image");
+        return false;
+    }
 
     // Make sure directory exists
     if (!create_dir(dir_full_path)) {
         return false;
     }
-    
+
     // Determine next index in directory
     int idx = count_files(dir_full_path);
+    if (idx < 0) idx = 0;
 
-    std::snprintf(filename, sizeof(filename), "%s/bee_%04d.jpg", dir_full_path, idx++);
+    char filepath[256];
+    std::snprintf(filepath, sizeof(filepath), "%s/bee_%04d.jpg", dir_full_path, idx + 1);
 
-    // Create the file and write the JPEG data
-    ESP_LOGI(TAG, "Saving detected JPEG: %s", filename);
-    FILE *fp = fopen(filename, "wb");
-    if (fp != NULL)
-    {
-        fwrite(captureImage->buf, 1, captureImage->len, fp);
-        fclose(fp);
-        ESP_LOGI(TAG, "JPEG saved as %s", filename);
-        return true;
+    // The framebuffer coming from the camera in this project is a grayscale
+    // buffer (1 byte per pixel). JPEG writers expect a proper JPEG stream.
+    // Convert grayscale -> RGB888 and encode to JPEG using the encoder helper.
+
+    const int w = captureImage->width;
+    const int h = captureImage->height;
+    const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
+
+    uint8_t *rgb_buf = static_cast<uint8_t*>(malloc(pixels * 3));
+    if (!rgb_buf) {
+        ESP_LOGE(TAG, "Failed to allocate RGB buffer");
+        return false;
     }
-    //else
-    //{
-    //    ESP_LOGE(TAG, "Failed to create file: %s", filename);
-    // //this errors and I dont know why
-    //}
+
+    // Expand grayscale to RGB by duplicating the gray value across R,G,B
+    for (size_t i = 0; i < pixels; ++i) {
+        uint8_t g = captureImage->buf[i];
+        rgb_buf[3*i + 0] = g;
+        rgb_buf[3*i + 1] = g;
+        rgb_buf[3*i + 2] = g;
+    }
+
+    dl::image::img_t img = {0};
+    img.width = w;
+    img.height = h;
+    img.pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB888;
+    img.data = rgb_buf;
+
+    dl::image::jpeg_img_t jpeg_img = {0};
+    jpeg_enc_config_t enc_cfg = {
+        .width = w,
+        .height = h,
+        .src_type = JPEG_PIXEL_FORMAT_RGB888,
+        .subsampling = JPEG_SUBSAMPLE_444,
+        .quality = 85,
+        .rotate = JPEG_ROTATE_0D,
+        .task_enable = false,
+    };
+
+    jpeg_error_t enc_ret = encode_img_to_jpeg(&img, &jpeg_img, enc_cfg);
+    free(rgb_buf);
+    if (enc_ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "JPEG encoding failed (%d)", enc_ret);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Saving detected JPEG: %s", filepath);
+    esp_err_t write_err = dl::image::write_jpeg(jpeg_img, filepath);
+    free(jpeg_img.data);
+    if (write_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save JPEG: %s", filepath);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "JPEG saved as %s", filepath);
+    return true;
+}
+
+bool save_grayscale_buffer(const uint8_t *gray_buf, int w, int h, const char *dir_full_path)
+{
+    if (!g_mounted) {
+        ESP_LOGE(TAG, "save_grayscale_buffer: SD not mounted");
+        return false;
+    }
+    if (!gray_buf || w <= 0 || h <= 0) {
+        ESP_LOGE(TAG, "save_grayscale_buffer: invalid parameters");
+        return false;
+    }
+
+    if (!create_dir(dir_full_path)) {
+        return false;
+    }
+
+    int idx = count_files(dir_full_path);
+    if (idx < 0) idx = 0;
+
+    char filepath[256];
+    std::snprintf(filepath, sizeof(filepath), "%s/bee_%04d.jpg", dir_full_path, idx + 1);
+
+    const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
+    uint8_t *rgb_buf = static_cast<uint8_t*>(malloc(pixels * 3));
+    if (!rgb_buf) {
+        ESP_LOGE(TAG, "Failed to allocate RGB buffer");
+        return false;
+    }
+
+    for (size_t i = 0; i < pixels; ++i) {
+        uint8_t g = gray_buf[i];
+        rgb_buf[3*i + 0] = g;
+        rgb_buf[3*i + 1] = g;
+        rgb_buf[3*i + 2] = g;
+    }
+
+    dl::image::img_t img = {0};
+    img.width = w;
+    img.height = h;
+    img.pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB888;
+    img.data = rgb_buf;
+
+    dl::image::jpeg_img_t jpeg_img = {0};
+    jpeg_enc_config_t enc_cfg = {
+        .width = w,
+        .height = h,
+        .src_type = JPEG_PIXEL_FORMAT_RGB888,
+        .subsampling = JPEG_SUBSAMPLE_444,
+        .quality = 85,
+        .rotate = JPEG_ROTATE_0D,
+        .task_enable = false,
+    };
+
+    jpeg_error_t enc_ret = encode_img_to_jpeg(&img, &jpeg_img, enc_cfg);
+    free(rgb_buf);
+    if (enc_ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "JPEG encoding failed (%d)", enc_ret);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Saving detected JPEG: %s", filepath);
+    esp_err_t write_err = dl::image::write_jpeg(jpeg_img, filepath);
+    free(jpeg_img.data);
+    if (write_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save JPEG: %s", filepath);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "JPEG saved as %s", filepath);
     return true;
 }
 
