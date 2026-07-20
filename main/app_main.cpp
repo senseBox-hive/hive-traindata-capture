@@ -39,7 +39,7 @@ static camera_config_t camera_config = {
     .pin_href = HREF_GPIO_NUM,
     .pin_pclk = PCLK_GPIO_NUM,
 
-    .xclk_freq_hz = 5000000,           // The clock frequency of the image sensor
+    .xclk_freq_hz = 500000,           // The clock frequency of the image sensor
     .pixel_format = PIXFORMAT_GRAYSCALE,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
     .frame_size = FRAMESIZE_QVGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
     .jpeg_quality = 10,                // The quality of the JPEG image, ranging from 0 to 63.
@@ -51,6 +51,11 @@ static camera_config_t camera_config = {
 
 static esp_err_t init_camera(void)
 {
+    //The following values need tweaking:
+    // aec_value
+    // gain
+    // DIFF_THRESH
+
     // Initialize the camera
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
@@ -64,14 +69,15 @@ static esp_err_t init_camera(void)
 
     // --- Set the manual exposure value ---
     // This is in "exposure lines", NOT milliseconds. Higher = longer exposure.
-    s->set_aec_value(s, 1200);   // range roughly 0..1200 (OV2640), 0..~1500+ (OV5640)
+    s->set_aec_value(s, 4000);   // range roughly 0..1200 (OV2640), 0..~1500+ (OV5640)
+    //set range heavily depends on the camera clock speed
 
     // --- Gain: turn off auto-gain too, or bright/dark scenes fight your exposure ---
     s->set_gain_ctrl(s, 0);      // 0 = disable AGC (auto gain)
     s->set_agc_gain(s, 0);       // manual gain, 0 = lowest (least noise)
     s->set_gainceiling(s, (gainceiling_t)0);  // cap on gain if you re-enable AGC
 
-    s->set_whitebal(s, 0);       // auto white balance off
+    s->set_whitebal(s, 1);       // auto white balance off
     s->set_awb_gain(s, 0);
     s->set_bpc(s, 0);            // black pixel correction
     s->set_wpc(s, 0);            // white pixel correction
@@ -110,7 +116,8 @@ extern "C" void app_main(void)
     // set W and H to the camera's frame size
     const int W = 320;
     const int H = 240;
-    const int DIFF_THRESH = 50; // threshold for motion detection
+
+    const int DIFF_THRESH = 20; // threshold for motion detection
     const size_t framePixels = static_cast<size_t>(W) * static_cast<size_t>(H);
 
     uint16_t *accum = static_cast<uint16_t *>(heap_caps_calloc(framePixels, sizeof(uint16_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
@@ -126,14 +133,19 @@ extern "C" void app_main(void)
         return;
     }
 
+    camera_fb_t *global_fb = NULL; // global framebuffer pointer
+
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %u bytes", esp_get_free_heap_size());
 
+        // Handle grayscale frames: 1 byte per pixel
+        std::vector<uint32_t> accumulated(W * H, 0);
+        
         // pixel-wise accumulation of frames
         for (int i = 0; i < 5; ++i) {
             ESP_LOGI("APP", "starting frame %d capture", i);
-            camera_fb_t *frame = esp_camera_fb_get();
-            if (!frame) {
+            global_fb = esp_camera_fb_get();
+            if (!global_fb) {
                 ESP_LOGE("CAM", "Camera capture failed");
                 continue;
             }
@@ -141,10 +153,11 @@ extern "C" void app_main(void)
             // Accumulate pixel values
             ESP_LOGI("APP", "Accumulating frame %d", i);
             for (size_t j = 0; j < framePixels; ++j) {
-                uint8_t f = frame->buf[j];
+                uint8_t f = global_fb->buf[j];
 
                 // 1. update slow background (lighting drift)
-                background[j] += ((int)f - background[j]) >> 5;
+                // tweak until vertical streaks are gone
+                background[j] += ((int)f - background[j]) >> 10;
 
                 // 2. motion this frame
                 int d = f - background[j];
@@ -153,33 +166,32 @@ extern "C" void app_main(void)
 
                 // 3. decaying-max accumulate (the "long exposure")
                 uint8_t decayed = (accum[j] * 240) >> 8;
-                accum[j] = (motion > decayed) ? motion : decayed;
+                accumulated[j] = (motion > decayed) ? motion : decayed;
             }
-
+            esp_camera_fb_return(global_fb);
             ESP_LOGI("APP", "Accumulated frame %d", i);
-            esp_camera_fb_return(frame);
+        }
+
+        for (size_t j = 0; j < W * H; ++j) {
+            global_fb->buf[j] = static_cast<uint8_t>(accumulated[j]);
         }
 
         // save the accumulated motion image as a JPEG
         // Allocate a separate grayscale buffer so we don't depend on the
         // camera driver's framebuffer layout/stride.
-        uint8_t *gray = static_cast<uint8_t *>(heap_caps_malloc(framePixels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (!gray) {
-            ESP_LOGE("APP", "Failed to allocate temporary gray buffer");
-            continue;
-        }
-        for (int j = 0; j < W * H; ++j) {
-            gray[j] = static_cast<uint8_t>(accum[j] & 0xFF);
-        }
-
-        bool saved = sdcard::save_grayscale_buffer(gray, W, H, "/sdcard/bee_traindata");
+        //uint8_t *gray = static_cast<uint8_t *>(heap_caps_malloc(framePixels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        //bool saved = sdcard::save_grayscale_buffer(gray, W, H, "/sdcard/bee_traindata");
+        
+        bool saved = sdcard::save_jpeg_directly(global_fb, "/sdcard/bee_traindata");
         if (!saved) {
             ESP_LOGE("SD", "Failed to save JPEG");
         } else {
             sdcard::write_log("/sdcard/bee_traindata/log.txt", "Saved motion image");
         }
-        heap_caps_free(gray);
-        
+        //heap_caps_free(gray);
+        heap_caps_free(global_fb);
+        esp_camera_fb_return(global_fb);
+
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
 
