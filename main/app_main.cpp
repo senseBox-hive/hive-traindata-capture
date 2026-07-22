@@ -3,6 +3,8 @@
 #include "esp_heap_caps.h"
 #include "esp_imgfx_crop.h"
 #include "dl_image.hpp"
+#include <cstdint>
+#include <stddef.h>
 #define MODEL_IMG_SIZE 224
 #include "sensor.h"
 #include <stdio.h>
@@ -42,7 +44,7 @@ static camera_config_t camera_config = {
     .xclk_freq_hz = 20000000,          // The clock frequency of the image sensor
     .pixel_format = PIXFORMAT_GRAYSCALE,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
     .frame_size = FRAMESIZE_QVGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
-    .jpeg_quality = 10,                // The quality of the JPEG image, ranging from 0 to 63.
+    .jpeg_quality = 5,                // The quality of the JPEG image, ranging from 0 to 63.
     .fb_count = 2,                     // The number of frame buffers to use.
     .fb_location = CAMERA_FB_IN_PSRAM, // Set the frame buffer storage location
     .grab_mode = CAMERA_GRAB_LATEST    //  The image capture mode.
@@ -63,39 +65,24 @@ static esp_err_t init_camera(void)
     return err;
 }
 
-void capture_averaged_image(camera_fb_t *main_pic, int num_frames)
+void capture_stack_consecutive(camera_fb_t *base_pic, float alpha)
 {
-    if (!main_pic || num_frames <= 0) {
+    float inverse_alpha = 1 - alpha;
+    if (!base_pic) {
         return;
     }
 
-    // Handle grayscale frames: 1 byte per pixel
-    size_t n = main_pic->len;
-    std::vector<uint32_t> accumulated(n, 0);
+    // Handle incoming frames: 
+    size_t n = base_pic->len;
 
-    for (int i = 0; i < num_frames; ++i) {
-        camera_fb_t *frame = esp_camera_fb_get();
-        if (!frame) {
-            continue;
-        }
-
-        // If frame size differs, skip this frame
-        if (frame->len != n) {
-            esp_camera_fb_return(frame);
-            continue;
-        }
-
-        for (size_t j = 0; j < n; ++j) {
-            accumulated[j] += frame->buf[j];
-        }
-
-        esp_camera_fb_return(frame);
+    camera_fb_t *incoming = esp_camera_fb_get();
+    if (!incoming) {
+        return;
     }
-
-    // Average and write back into main_pic (grayscale)
     for (size_t j = 0; j < n; ++j) {
-        main_pic->buf[j] = static_cast<uint8_t>(accumulated[j] / num_frames);
+        base_pic->buf[j] = (base_pic->buf[j] * inverse_alpha) + (incoming->buf[j] * alpha);
     }
+    esp_camera_fb_return(incoming);
 }
 
 extern "C" void app_main(void)
@@ -114,25 +101,26 @@ extern "C" void app_main(void)
         return;
     }
 
+    ESP_LOGI("MEM", "Capturing base frame for stacking...");
+    camera_fb_t *main_pic = esp_camera_fb_get();
+
+    ESP_LOGI("MEM", "Begin Stacking loop...");
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
         //stack consecutive frames to capture bee trajectories
-
-        camera_fb_t *main_pic = esp_camera_fb_get();
+    
         if (!main_pic) {
             continue;
         }
 
-        //capture N frames and stack on top of the main_pic
-        capture_averaged_image(main_pic, 6);
+        //capture new frame and stack it on top of the main_pic with set transparency
+        capture_stack_consecutive(main_pic, 0.3f);
 
         //rohes JPEG speichern (will encode when needed)
         sdcard::save_jpeg_directly(main_pic, "/sdcard/bee_traindata");
 
-        // return main buffer so camera driver can reuse it
-        esp_camera_fb_return(main_pic);
-        
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
-
+    // return main buffer so camera driver can reuse it
+    esp_camera_fb_return(main_pic);
 }
