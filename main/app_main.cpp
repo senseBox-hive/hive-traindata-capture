@@ -3,6 +3,8 @@
 #include "esp_heap_caps.h"
 #include "esp_imgfx_crop.h"
 #include "dl_image.hpp"
+#include <cstdint>
+#include <stddef.h>
 #define MODEL_IMG_SIZE 224
 #include "sensor.h"
 #include <stdio.h>
@@ -40,10 +42,10 @@ static camera_config_t camera_config = {
     .pin_pclk = PCLK_GPIO_NUM,
 
     .xclk_freq_hz = 20000000,          // The clock frequency of the image sensor
-    .pixel_format = PIXFORMAT_JPEG,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
-    .frame_size = FRAMESIZE_UXGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
-    .jpeg_quality = 10,                // The quality of the JPEG image, ranging from 0 to 63.
-    .fb_count = 1,                     // The number of frame buffers to use.
+    .pixel_format = PIXFORMAT_GRAYSCALE,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
+    .frame_size = FRAMESIZE_QVGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
+    .jpeg_quality = 5,                // The quality of the JPEG image, ranging from 0 to 63.
+    .fb_count = 2,                     // The number of frame buffers to use.
     .fb_location = CAMERA_FB_IN_PSRAM, // Set the frame buffer storage location
     .grab_mode = CAMERA_GRAB_LATEST    //  The image capture mode.
 
@@ -63,9 +65,31 @@ static esp_err_t init_camera(void)
     return err;
 }
 
+void capture_stack_consecutive(camera_fb_t *base_pic, float alpha)
+{
+    float inverse_alpha = 1 - alpha;
+    if (!base_pic) {
+        return;
+    }
+
+    // Handle incoming frames: 
+    size_t n = base_pic->len;
+
+    camera_fb_t *incoming = esp_camera_fb_get();
+    if (!incoming) {
+        return;
+    }
+    for (size_t j = 0; j < n; ++j) {
+        base_pic->buf[j] = (base_pic->buf[j] * inverse_alpha) + (incoming->buf[j] * alpha);
+    }
+    esp_camera_fb_return(incoming);
+}
+
 extern "C" void app_main(void)
 {
     ESP_LOGI("SD", "Mounting SD card...");
+    gpio_set_direction(GPIO_NUM_43, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_43, 1);
     bool mounted = sdcard::init();
     if (!mounted) {
         ESP_LOGE("SD", "SD card init/mount failed");
@@ -76,20 +100,27 @@ extern "C" void app_main(void)
         ESP_LOGE("APP", "Camera initialization failed");
         return;
     }
-    
+
+    ESP_LOGI("MEM", "Capturing base frame for stacking...");
+    camera_fb_t *main_pic = esp_camera_fb_get();
+
+    ESP_LOGI("MEM", "Begin Stacking loop...");
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
-        
-        camera_fb_t *pic = esp_camera_fb_get();
-        if (!pic) {
+        //stack consecutive frames to capture bee trajectories
+    
+        if (!main_pic) {
             continue;
         }
 
-        //rohes JPEG speichern
-        sdcard::save_jpeg_directly(pic, "/sdcard/bee_traindata");
-        esp_camera_fb_return(pic);
-        
+        //capture new frame and stack it on top of the main_pic with set transparency
+        capture_stack_consecutive(main_pic, 0.3f);
+
+        //rohes JPEG speichern (will encode when needed)
+        sdcard::save_jpeg_directly(main_pic, "/sdcard/bee_traindata");
+
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
-
+    // return main buffer so camera driver can reuse it
+    esp_camera_fb_return(main_pic);
 }
