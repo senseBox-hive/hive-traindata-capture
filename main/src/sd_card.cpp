@@ -58,7 +58,7 @@ static bool mount_sdcard_spi() {
     // If format_if_mount_failed is set to true, SD card will be partitioned and
     // formatted in case when mounting fails.
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024,
         .disk_status_check_enable = false,
@@ -277,92 +277,6 @@ int count_files(const char *path) {
     return count;
 }
 
-bool save_jpeg(const dl::image::img_t &img,
-                          const dl::cls::result_t &best,
-                          const char *dir_full_path) {
-    if (!g_mounted) {
-        ESP_LOGE(TAG, "save_jpeg: SD not mounted");
-        return false;
-    }
-    if (!img.data) {
-        ESP_LOGE(TAG, "save_jpeg: image has no data");
-        return false;
-    }
-    if (img.pix_type != dl::image::DL_IMAGE_PIX_TYPE_RGB888) {
-        ESP_LOGE(TAG, "save_jpeg: image is not RGB888");
-        return false;
-    }
-
-    // Make sure directory exists
-    if (!create_dir(dir_full_path)) {
-        return false;
-    }
-
-    // Encode to JPEG
-    dl::image::jpeg_img_t jpeg_img;
-    jpeg_enc_config_t enc_cfg = {
-        .width = img.width,
-        .height = img.height,
-        .src_type = JPEG_PIXEL_FORMAT_RGB888,
-        .subsampling = JPEG_SUBSAMPLE_444,
-        .quality = 80,
-        .rotate = JPEG_ROTATE_0D,
-        .task_enable = true,
-        .hfm_task_priority = 13,
-        .hfm_task_core = 1,
-    };
-
-    jpeg_error_t enc_ret = encode_img_to_jpeg(&img, &jpeg_img, enc_cfg);
-    if (enc_ret != JPEG_ERR_OK) {
-        ESP_LOGE(TAG, "JPEG encoding failed (%d)", enc_ret);
-        return false;
-    }
-
-    // Determine next index in directory
-    int idx = count_files(dir_full_path);
-    if (idx < 0) {
-        free(jpeg_img.data);
-        return false;
-    }
-
-
-    char filepath[256];
-    std::snprintf(filepath, sizeof(filepath), "%s/bumblebee_%04d.jpg", dir_full_path, idx + 1);
-
-    ESP_LOGI(TAG, "Saving detected JPEG: %s", filepath);
-
-    esp_err_t write_err = dl::image::write_jpeg(jpeg_img, filepath);
-    if (write_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save JPEG: %s", filepath);
-        free(jpeg_img.data);
-        return false;
-    }
-
-    // Änderungsdatum setzen (aktuelles Systemdatum/Zeit) via FATFS
-    // Nur möglich, wenn FF_USE_CHMOD und FF_FS_NORTC == 0 in FATFS Konfiguration
-    struct tm *tm_now;
-    time_t t = time(NULL);
-    tm_now = localtime(&t);
-    if (tm_now) {
-#ifdef f_utime
-        FILINFO finfo = {0};
-        finfo.fdate = ((tm_now->tm_year - 80) << 9) | ((tm_now->tm_mon + 1) << 5) | tm_now->tm_mday;
-        finfo.ftime = (tm_now->tm_hour << 11) | (tm_now->tm_min << 5) | (tm_now->tm_sec / 2);
-        if (f_utime(filepath, &finfo) != 0) {
-            ESP_LOGW(TAG, "Could not set FATFS file time: %s", filepath);
-        }
-#else
-        ESP_LOGW(TAG, "f_utime nicht verfügbar, Änderungsdatum kann nicht gesetzt werden: %s", filepath);
-#endif
-    } else {
-        ESP_LOGW(TAG, "Could not get localtime for file time: %s", filepath);
-    }
-
-    ESP_LOGI(TAG, "Saved successfully");
-    free(jpeg_img.data);
-    return true;
-}
-
 bool save_jpeg_directly(camera_fb_t *captureImage, const char *dir_full_path)
 {
     if (!create_dir(dir_full_path)) {
@@ -476,6 +390,27 @@ bool save_jpeg_directly(camera_fb_t *captureImage, const char *dir_full_path)
         return false;
     }
     fwrite(jpeg_img.data, 1, jpeg_img.data_len, fp);
+
+    // Änderungsdatum setzen (aktuelles Systemdatum/Zeit) via FATFS
+    // Nur möglich, wenn FF_USE_CHMOD und FF_FS_NORTC == 0 in FATFS Konfiguration
+    struct tm *tm_now;
+    time_t t = time(NULL);
+    tm_now = localtime(&t);
+    if (tm_now) {
+#ifdef f_utime
+        FILINFO finfo = {0};
+        finfo.fdate = ((tm_now->tm_year - 80) << 9) | ((tm_now->tm_mon + 1) << 5) | tm_now->tm_mday;
+        finfo.ftime = (tm_now->tm_hour << 11) | (tm_now->tm_min << 5) | (tm_now->tm_sec / 2);
+        if (f_utime(filepath, &finfo) != 0) {
+            ESP_LOGW(TAG, "Could not set FATFS file time: %s", filepath);
+        }
+#else   
+        ESP_LOGW(TAG, "f_utime nicht verfügbar, Änderungsdatum kann nicht gesetzt werden: %s", filepath);
+#endif
+    } else {
+        ESP_LOGW(TAG, "Could not get localtime for file time: %s", filepath);
+    }
+
     fclose(fp);
 
     ESP_LOGI(TAG, "JPEG saved as %s", filepath);
