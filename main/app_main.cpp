@@ -44,8 +44,8 @@ static camera_config_t camera_config = {
     .xclk_freq_hz = 20000000,          // The clock frequency of the image sensor
     .pixel_format = PIXFORMAT_GRAYSCALE,    // The pixel format of the image: PIXFORMAT_ + YUV422|GRAYSCALE|RGB565|JPEG
     .frame_size = FRAMESIZE_QVGA,      // The resolution size of the image: FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
-    .jpeg_quality = 5,                // The quality of the JPEG image, ranging from 0 to 63.
-    .fb_count = 2,                     // The number of frame buffers to use.
+    .jpeg_quality = 10,                // The quality of the JPEG image, ranging from 0 to 63.
+    .fb_count = 1,                     // The number of frame buffers to use.
     .fb_location = CAMERA_FB_IN_PSRAM, // Set the frame buffer storage location
     .grab_mode = CAMERA_GRAB_LATEST    //  The image capture mode.
 
@@ -115,19 +115,15 @@ extern "C" void app_main(void)
     while (true) {
         ESP_LOGI("MEM", "Free heap at start of loop: %lu bytes", esp_get_free_heap_size());
         
-        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Attempting capture...");
         camera_fb_t *pic = esp_camera_fb_get();
         if (!pic) {
             sdcard::write_log("/sdcard/bee_traindata/log.txt", "Camera capture failed");
             continue;
         }
 
-        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Saving JPEG...");
         //rohes JPEG speichern
         sdcard::save_jpeg_directly(pic, "/sdcard/bee_traindata");
-        sdcard::write_log("/sdcard/bee_traindata/log.txt", "JPEG saved successfully");
         esp_camera_fb_return(pic);
-        sdcard::write_log("/sdcard/bee_traindata/log.txt", "Capture loop iteration complete");
         
         vTaskDelay(pdMS_TO_TICKS(5)); // perhaps remove delay entirely?
     }
