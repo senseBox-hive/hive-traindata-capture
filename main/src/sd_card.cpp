@@ -341,6 +341,8 @@ bool save_jpeg_directly(camera_fb_t *captureImage, const char *dir_full_path)
             rgb_buf[3*i + 1] = g;
             rgb_buf[3*i + 2] = b;
         }
+    } else if (captureImage->format == PIXFORMAT_RGB888) {
+        memcpy(rgb_buf, captureImage->buf, pixels * 3);
     } else {
         ESP_LOGW(TAG, "Unsupported frame format %d, attempting raw write", captureImage->format);
         FILE *fp = fopen(filepath, "wb");
